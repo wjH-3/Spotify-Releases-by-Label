@@ -112,10 +112,8 @@ async def check_and_notify():
     """Check for new releases every 24 hours"""
     # Only run on Fridays at 12 PM GMT
     now = datetime.now(timezone.utc)
-    if now.weekday() != 4:  # 4 is Friday
-        return
     
-    if now.hour != 12:  # 12 PM GMT
+    if now.hour != 12:  # 12 PM UTC
         return
         
     new_releases = await check_new_releases()
