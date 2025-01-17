@@ -5,19 +5,21 @@ import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
 from datetime import datetime, timezone
 import asyncio
+from dotenv import load_dotenv
 
 # Environment variables for API keys and tokens
+load_dotenv('tokens.env')
 SPOTIFY_CLIENT_ID = os.getenv('SPOTIFY_CLIENT_ID')
 SPOTIFY_CLIENT_SECRET = os.getenv('SPOTIFY_CLIENT_SECRET')
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
-CHANNEL_ID = int(os.getenv('DISCORD_CHANNEL_ID'))
 
 # List of label IDs to track (you can add more)
 LABELS_TO_TRACK = [
     "The Third Movement",
     "Heresy",
     "Broken Strain",
-    "Spoontech Records"
+    "Spoontech Records",
+    "Mirror Society"
 ]
 
 # Initialize Spotify client
@@ -31,7 +33,7 @@ spotify = spotipy.Spotify(
 # Initialize Discord bot
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix='/', intents=intents)
+bot = commands.Bot(command_prefix='!', intents=intents)
 
 # Store the last check timestamp
 last_check = {}
@@ -43,10 +45,9 @@ async def check_new_releases():
     for label_id in LABELS_TO_TRACK:
         # Get all albums from the label
         results = spotify.search(
-            f"label:{label_id}",
+            f'label:"{label_id}" tag:new',
             type='album',
-            limit=3,
-            market='US'
+            limit=5,
         )
         
         for item in results['albums']['items']:
@@ -57,17 +58,54 @@ async def check_new_releases():
             # If this is a new release we haven't seen before
             if (label_id not in last_check or 
                 release_date > last_check[label_id]):
-                new_releases.append({
-                    'name': item['name'],
-                    'artists': [artist['name'] for artist in item['artists']],
-                    'url': item['external_urls']['spotify'],
-                    'label': label_id
-                })
+                # Fetch detailed album information
+                album_results = spotify.album(item['id'])
+                
+                # Check if the album's label matches any in LABELS_TO_TRACK
+                if album_results['label'] in LABELS_TO_TRACK:
+                    new_releases.append({
+                        'name': album_results['name'],
+                        'artists': [artist['name'] for artist in album_results['artists']],
+                        'url': album_results['external_urls']['spotify'],
+                        'label': album_results['label'],
+                        'release_date': album_results['release_date'],
+                        'image_url': album_results['images'][0]['url'] if album_results['images'] else None
+                    })
         
         # Update last check time for this label
         last_check[label_id] = datetime.now(timezone.utc)
     
     return new_releases
+
+async def create_release_embed(release):
+    """Create a consistent embed for releases"""
+    embed = discord.Embed(
+        title=f"{release['name']}",
+        url=release['url'],
+        color=discord.Color.green()
+    )
+    
+    if release['image_url']:
+        embed.set_thumbnail(url=release['image_url'])
+    
+    # Add fields vertically (not inline)
+    embed.add_field(
+        name="Artist(s)",
+        value=", ".join(release['artists']),
+        inline=False
+    )
+    embed.add_field(
+        name="Label",
+        value=release['label'],
+        inline=False
+    )
+    embed.add_field(
+        name="Release Date",
+        value=release['release_date'],
+        inline=False
+    )
+    
+    return embed
 
 @tasks.loop(hours=24)
 async def check_and_notify():
@@ -79,35 +117,23 @@ async def check_and_notify():
     
     if now.hour != 12:  # 12 PM GMT
         return
-    
+        
     new_releases = await check_new_releases()
     
     if new_releases:
-        channel = bot.get_channel(CHANNEL_ID)
-        
-        for release in new_releases:
-            # Create and send embedded message
-            embed = discord.Embed(
-                title="New Release! 🎵",
-                color=discord.Color.green()
-            )
-            embed.add_field(
-                name="Album",
-                value=release['name'],
-                inline=False
-            )
-            embed.add_field(
-                name="Artists",
-                value=", ".join(release['artists']),
-                inline=False
-            )
-            embed.add_field(
-                name="Listen on Spotify",
-                value=release['url'],
-                inline=False
-            )
-            
-            await channel.send(embed=embed)
+        for guild in bot.guilds:
+            # Find the first text channel we can send messages in
+            channel = next((
+                channel for channel in guild.text_channels 
+                if channel.permissions_for(guild.me).send_messages
+            ), None)
+            if channel:       
+                for release in new_releases:
+                    embed = await create_release_embed(release)
+                    try:
+                        await channel.send(embed=embed)
+                    except Exception as e:
+                        print(f"Error sending to {guild.name}: {str(e)}")
 
 @bot.event
 async def on_ready():
@@ -126,27 +152,27 @@ async def check_all(ctx):
         return
     
     for release in new_releases:
-        embed = discord.Embed(
-            title="New Release! 🎵",
-            color=discord.Color.green()
-        )
-        embed.add_field(
-            name="Album",
-            value=release['name'],
-            inline=False
-        )
-        embed.add_field(
-            name="Artists",
-            value=", ".join(release['artists']),
-            inline=False
-        )
-        embed.add_field(
-            name="Listen on Spotify",
-            value=release['url'],
-            inline=False
-        )
-        
+        embed = await create_release_embed(release)
         await ctx.send(embed=embed)
+
+@bot.command(name='labels')
+async def list_labels(ctx):
+    """Command to list all labels being tracked"""
+    embed = discord.Embed(
+        title="Currently Tracked Labels",
+        description="The following labels are being monitored for new releases:",
+        color=discord.Color.blue()
+    )
+    
+    # Add each label as a bullet point
+    labels_list = "\n".join(f"• {label}" for label in LABELS_TO_TRACK)
+    embed.add_field(
+        name="Labels",
+        value=labels_list,
+        inline=False
+    )
+    
+    await ctx.send(embed=embed)
 
 def main():
     """Main function to run the bot"""
