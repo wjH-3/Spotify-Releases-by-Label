@@ -19,7 +19,8 @@ LABELS_TO_TRACK = [
     "Heresy",
     "Broken Strain",
     "Spoontech Records",
-    "Mirror Society"
+    "Mirror Society",
+    "Emergence Records"
 ]
 
 # Initialize Spotify client
